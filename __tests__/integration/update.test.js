@@ -997,7 +997,9 @@ test(
     `,
     options: {
       appendPlugins: [
+        // eslint-disable-next-line global-require
         require('../../index.js'),
+        // eslint-disable-next-line global-require
         require('@graphile-contrib/pg-simplify-inflector'),
       ],
       simpleCollections: 'both',
@@ -1844,6 +1846,153 @@ test(
       const child = result.data.updateGrandchildById.grandchild.childByChildId;
       expect(child.parentByParentId).not.toBeNull();
       expect(child.parentByParentId.name).toEqual('renamed parent');
+    },
+  }),
+);
+
+test(
+  'forward nested mutation with create and empty nested fields succeeds',
+  withSchema({
+    setup: `
+      create table p.parent (
+        id serial primary key,
+        name text not null
+      );
+      create table p.child (
+        id serial primary key,
+        parent_id integer,
+        name text not null,
+        constraint child_parent_fkey foreign key (parent_id)
+          references p.parent (id)
+      );
+      insert into p.parent values(1, 'parent');
+    `,
+    test: async ({ schema, pgClient }) => {
+      const query = `
+        mutation {
+          updateParentById(
+            input: {
+              id: 1
+              parentPatch: {
+                childrenUsingId: {
+                  create: {
+                    id: 1,
+                    parentId: 1,
+                    name: "child"
+                  },
+                  connectByNodeId: []
+                  connectById: []
+                  deleteByNodeId: []
+                  deleteById: []
+                  updateByNodeId: []
+                  updateById: []
+                }
+              }
+            }
+          ) {
+            parent {
+              id
+              name
+              childrenByParentId {
+                nodes {
+                  id
+                  parentId
+                  name
+                }
+              }
+            }
+          }
+        }
+      `;
+      expect(schema).toMatchSnapshot();
+
+      const result = await graphql(schema, query, null, { pgClient });
+      expect(result).not.toHaveProperty('errors');
+
+      const { parent } = result.data.updateParentById;
+      expect(parent.childrenByParentId.nodes).toHaveLength(1);
+      expect(parent.id).toBe(1);
+      expect(parent.name).toBe('parent');
+
+      const child = parent.childrenByParentId.nodes[0];
+      expect(child.id).toBe(1);
+      expect(child.name).toBe('child');
+      expect(child.parentId).toBe(1);
+    },
+  }),
+);
+
+test(
+  'forward nested mutation with updateById and deleteById succeeds',
+  withSchema({
+    setup: `
+      create table p.parent (
+        id serial primary key,
+        name text not null
+      );
+      create table p.child (
+        id serial primary key,
+        parent_id integer,
+        name text not null,
+        constraint child_parent_fkey foreign key (parent_id)
+          references p.parent (id)
+      );
+
+      insert into p.parent values(1, 'parent');
+      insert into p.child values(1, 1, 'child to update');
+      insert into p.child values(2, 1, 'child to delete');
+    `,
+    test: async ({ schema, pgClient }) => {
+      const newChildName = 'updated child';
+
+      const query = `
+        mutation {
+          updateParentById(
+            input: {
+              id: 1
+              parentPatch: {
+                childrenUsingId: {
+                  deleteById: {
+                    id: 2
+                  }
+                  updateById: {
+                    id: 1
+                    childPatch: {
+                      name: "${newChildName}"
+                    }
+                  }
+                }
+              }
+            }
+          ) {
+            parent {
+              id
+              name
+              childrenByParentId {
+                nodes {
+                  id
+                  parentId
+                  name
+                }
+              }
+            }
+          }
+        }
+      `;
+      expect(schema).toMatchSnapshot();
+
+      const result = await graphql(schema, query, null, { pgClient });
+      expect(result).not.toHaveProperty('errors');
+
+      const { parent } = result.data.updateParentById;
+      expect(parent.childrenByParentId.nodes).toHaveLength(1);
+      expect(parent.id).toBe(1);
+      expect(parent.name).toBe('parent');
+
+      const child = parent.childrenByParentId.nodes[0];
+      expect(child.id).toBe(1);
+      expect(child.name).toBe(newChildName);
+      expect(child.parentId).toBe(1);
     },
   }),
 );
